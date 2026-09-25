@@ -1,0 +1,14 @@
+pytest==8.4.2
+# Snapshot assertions for the synthesized CloudFormation template.
+syrupy==6.0.0
+
+ruff==0.16.3
+
+# The unit tests import src/lambdas/index.py, which imports powertools from the layer.
+# Referenced rather than re-pinned so the tests always run against the versions the
+# layer actually ships.
+-r src/layer/requirements.txt
+
+# Integration tests only. boto3 is provided by the Lambda runtime, so it belongs in
+# neither requirements.txt nor the layer.
+boto3==1.43.101

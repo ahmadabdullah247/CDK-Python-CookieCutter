@@ -1,0 +1,19 @@
+{
+  "project_name": "CDK Python Service",
+  "project_slug": "{{ cookiecutter.project_name.lower().replace(' ', '-').replace('_', '-') }}",
+  "module_name": "{{ cookiecutter.project_slug.replace('-', '_') }}",
+  "class_prefix": "{{ cookiecutter.project_name.title().replace(' ', '').replace('-', '').replace('_', '') }}",
+  "lambda_name": "hello_world",
+  "aws_region": "eu-central-1",
+  "aws_account_id": "123456789012",
+  "bootstrap_qualifier": "{{ cookiecutter.module_name.replace('_', '')[:10] }}",
+  "iam_policy_name": "cdkCFExecutionPolicy{{ cookiecutter.class_prefix }}",
+  "python_version": "3.14",
+  "lambda_architecture": ["arm64", "x86_64"],
+
+  "__lambda_construct": "{{ cookiecutter.lambda_name.replace('_', ' ').title().replace(' ', '') }}",
+  "__service_name": "{{ cookiecutter.lambda_name.replace('_', ' ').title().replace(' ', '') }}",
+  "__pip_platform": "{% if cookiecutter.lambda_architecture == 'arm64' %}manylinux2014_aarch64{% else %}manylinux2014_x86_64{% endif %}",
+  "__cdk_architecture": "{% if cookiecutter.lambda_architecture == 'arm64' %}ARM_64{% else %}X86_64{% endif %}",
+  "__cdk_runtime": "PYTHON_{{ cookiecutter.python_version.replace('.', '_') }}"
+}

@@ -1,0 +1,167 @@
+# CI pipeline stage mapping:
+#
+#   build:       task install | task build
+#   test:        task lint | task synth
+#   deploy:      task deploy
+#
+# No policy:update — the CloudFormation execution policy needs IAM write access the
+# deployment user must not have. See scripts/update-cf-execution-policy.sh.
+#
+version: "3"
+
+dotenv:
+  - .env
+
+# Everything project-specific lives in this block, because it is the only part of this
+# file cookiecutter renders. Below the raw fence, {{ '{{' }}.VAR{{ '}}' }} is Task's own syntax.
+vars:
+  VENV: ./.venv
+  PYTHON: ./.venv/bin/python
+  ZIP_NAME: {{ cookiecutter.lambda_name }}.zip
+  # The Lambda target platform, which is NOT this machine's. Keep these in step with the
+  # runtime and architecture declared in infrastructure/ — wheels for the wrong platform
+  # install happily here and then fail to import inside Lambda.
+  LAMBDA_PYTHON_VERSION: "{{ cookiecutter.python_version }}"
+  LAMBDA_PLATFORM: {{ cookiecutter.__pip_platform }}
+{% raw %}
+tasks:
+  install:
+    desc: Create .venv and install runtime + dev dependencies
+    run: once
+    # timestamp, not the default checksum: checksum only fingerprints sources, so a
+    # deleted .venv (e.g. after cleanup:all) with unchanged requirements would be skipped.
+    method: timestamp
+    sources:
+      - requirements.txt
+      - requirements-dev.txt
+    generates:
+      - .venv/pyvenv.cfg
+    cmds:
+      - python3 -m venv {{.VENV}}
+      - "{{.PYTHON}} -m pip install --quiet --upgrade pip"
+      - "{{.PYTHON}} -m pip install --quiet -r requirements.txt -r requirements-dev.txt"
+
+  lint:
+    desc: Lint Python source files with ruff
+    deps: [install]
+    cmds:
+      - ./.venv/bin/ruff check src/ tests/ infrastructure/
+      - ./.venv/bin/ruff format src/ tests/ infrastructure/ --check
+
+  lint:fix:
+    desc: Auto-fix lint errors and format Python source files
+    deps: [install]
+    cmds:
+      - ./.venv/bin/ruff check src/ tests/ infrastructure/ --fix
+      - ./.venv/bin/ruff format src/ tests/ infrastructure/
+
+  synth:
+    desc: Synthesize the CloudFormation template
+    deps: [build]
+    cmds:
+      - cdk synth
+
+  deploy:
+    desc: Deploy the stack
+    deps: [synth]
+    cmds:
+      # --app cdk.out deploys the assembly synth just wrote; without it cdk deploy re-synthesizes
+      - cdk deploy --app cdk.out --require-approval never
+
+  destroy:
+    desc: Destroy the stack
+    cmds:
+      - cdk destroy --force
+
+  diff:
+    desc: Diff the stack against the deployed state
+    cmds:
+      - cdk diff
+
+  # Scripts to cleanup
+  cleanup:environment:
+    desc: "cleanup environment variables"
+    run: once
+    silent: true
+    cmds:
+      - rm -f ./.task/environment.done .env
+
+  cleanup:cdk:
+    desc: "cleanup cdk.out and built Lambda assets"
+    run: once
+    silent: true
+    cmds:
+      - rm -rf cdk.out assets
+
+  cleanup:python:cache:
+    desc: "cleanup python cache"
+    run: once
+    silent: true
+    cmds:
+      - find . -type d -name "__pycache__" -exec rm -rf {} +
+
+  cleanup:task:cache:
+    desc: "cleanup task cache"
+    run: once
+    silent: true
+    cmds:
+      - rm -rf .task
+
+  cleanup:all:
+    desc: "DESTRUCTIVE — removes cdk.out, caches, .venv AND .env (restore .env from .env.example afterwards)"
+    run: once
+    silent: true
+    cmds:
+      - task: cleanup:environment
+      - task: cleanup:cdk
+      - task: cleanup:python:cache
+      - task: cleanup:task:cache
+      - rm -rf .coverage .kics .mypy_cache .pytest_cache assets coverage .venv .ruff_cache node_modules
+
+  # Scripts to build Lambda artifacts
+  build:
+    desc: Build the Lambda layer and the Lambda code zip
+    deps: [build:layer, build:lambda]
+
+  build:layer:
+    desc: Cross-install layer dependencies for the Lambda runtime/architecture
+    deps: [install]
+    sources:
+      - src/layer/requirements.txt
+    generates:
+      - assets/layer/python/**/*
+    cmds:
+      - rm -rf ./assets/layer
+      - mkdir -p {{.PACKAGES_DESTINATION}}
+      # --target, or pip installs into this venv instead of the layer. --platform and
+      # --python-version cross-install for Lambda rather than this machine, and pip
+      # requires --only-binary with them. --no-compile keeps the local interpreter's
+      # bytecode out of the layer, which Lambda would ignore anyway.
+      - >-
+        {{.PYTHON}} -m pip install -r src/layer/requirements.txt
+        --target {{.PACKAGES_DESTINATION}}
+        --platform {{.LAMBDA_PLATFORM}}
+        --python-version {{.LAMBDA_PYTHON_VERSION}}
+        --implementation cp
+        --only-binary=:all:
+        --no-compile
+    vars:
+      PACKAGES_DESTINATION: ./assets/layer/python
+
+  build:lambda:
+    desc: Zip the Lambda handler and service source into assets/
+    sources:
+      - src/lambdas/**/*
+      - src/services/**/*
+    generates:
+      - assets/{{.ZIP_NAME}}
+    cmds:
+      - find ./src -type d -name "__pycache__" -exec rm -rf {} +
+      - rm -f ./assets/{{.ZIP_NAME}}
+      - mkdir -p ./assets
+      # -X drops uid/gid and extra attrs so the zip doesn't vary by build machine (mtimes still do)
+      - cd ./src/lambdas && zip -Xqr ../../assets/{{.ZIP_NAME}} . -x '*__pycache__*'
+      # services/ keeps its directory in the zip so the handler can import it as a package;
+      # the lambdas/ contents above are flattened to the root because handler="index.handler".
+      - cd ./src && zip -Xqr ../assets/{{.ZIP_NAME}} services -x '*__pycache__*'
+{% endraw %}

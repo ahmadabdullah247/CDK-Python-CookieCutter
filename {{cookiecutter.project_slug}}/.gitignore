@@ -1,0 +1,16 @@
+*.swp
+__pycache__
+.pytest_cache
+.venv
+*.egg-info
+
+.env
+# CDK asset staging directory
+.cdk.staging
+cdk.out
+
+# cache
+.mypy_cache
+.task
+.ruff_cache
+assets
